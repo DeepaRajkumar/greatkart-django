@@ -1,9 +1,10 @@
-from django.shortcuts import render,redirect
+from django.shortcuts import render,redirect,get_object_or_404
 from django.contrib import messages,auth
-from .forms import RegistrationForm
-from .models import Account
+from .forms import RegistrationForm,UserForm,UserProfileForm
+from .models import Account,UserProfile
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse
+from orders.models import Order,OrderProduct
 
 # Verification email
 from django.contrib.sites.shortcuts import get_current_site
@@ -12,10 +13,11 @@ from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes
 from django.contrib.auth.tokens import default_token_generator
 from django.core.mail import EmailMessage
-
+from django.core.mail import send_mail
 from carts.views import _cart_id
 from carts.models import Cart, CartItem
 import requests
+
 def register(request):
     if request.method=="POST":
         form=RegistrationForm(request.POST)
@@ -30,18 +32,24 @@ def register(request):
             user.phone_number=phone_number
             user.save()
 
+            #create user profile
+            profile=UserProfile()
+            profile.user_id=user.id
+            profile.profile_picture='default/default-profile.png'
+            profile.save()
+
             #USER ACTIVATION
-        #    current_site=get_current_site(request)
-        #    mail_subject="Please activate your account"
-        #    message=render_to_string('account/account_verification_email.html',{
-        #    'user':user,
-        #    'domain':current_site,
-        #    'uid':urlsafe_base64_encode(force_bytes(user.pk)),
-        #    'token': default_token_generator.make_token(user),
-        #    })
-        #    to_email =email
-        #    send_email=EmailMessage(mail_subject,message,to=[to_email])
-        #    send_email.send()
+            # current_site=get_current_site(request)
+            # mail_subject="Please activate your account"
+            # message=render_to_string('account/account_verification_email.html',{
+            # 'user':user,
+            # 'domain':current_site,
+            # 'uid':urlsafe_base64_encode(force_bytes(user.pk)),
+            # 'token': default_token_generator.make_token(user),
+            # })
+            # to_email =email
+            # send_email=EmailMessage(mail_subject,message,to=[to_email])
+            # send_email.send()
             messages.success(request,"Registraion Successful")
             return redirect('register')
     else:
@@ -117,7 +125,85 @@ def logout(request):
     messages.success(request,"You are logged out.")
     return redirect('login')
 def activate(request,uidb64,token):
-    return HttpResponse("ok")
+    print("activation done")
+    return
+
+@login_required(login_url='login')
 def dashboard(request):
-    return render(request,'account/dashboard.html')
+    orders=Order.objects.order_by('-created_at').filter(user_id=request.user.id,is_ordered=True)
+    orders_count=orders.count()
+    userprofile= UserProfile.objects.get(user_id=request.user.id)
+    context={
+    'orders_count':orders_count,
+    'userprofile':userprofile,
+    }
+    return render(request,'account/dashboard.html',context)
+@login_required(login_url='login')
+def my_orders(request):
+    orders=Order.objects.filter(user=request.user,is_ordered=True).order_by('-created_at')
+    context={
+    'orders':orders
+
+    }
+    return render(request,'account/my_orders.html',context)
+
+@login_required(login_url='login')
+def edit_profile(request):
+    userprofile = get_object_or_404(UserProfile,user=request.user)
+    if request.method == 'POST':
+        user_form = UserForm(request.POST,instance=request.user)
+        profile_form =UserProfileForm(request.POST,request.FILES,instance=userprofile)
+        if user_form.is_valid() and profile_form.is_valid():
+            user_form.save()
+            profile_form.save()
+            messages.success(request,'Your profile has been updated.')
+            return redirect('edit_profile')
+    else:
+        user_form=UserForm(instance=request.user)
+        profile_form=UserProfileForm(instance=userprofile)
+        context={
+        'user_form':user_form,
+        'profile_form':profile_form,
+        'userprofile':userprofile,
+
+        }
+    return render(request,'account/edit_profile.html',context)
+
+@login_required(login_url='login')
+def change_password(request):
+    if  request.method == "POST":
+        current_password = request.POST['current_password']
+        new_password = request.POST['new_password']
+        confirm_password = request.POST['confirm_password']
+        user = Account.objects.get(username__exact=request.user.username)
+        if new_password == confirm_password:
+            success= user.check_password(current_password)
+            if success:
+                user.set_password(new_password)
+                user.save()
+                messages.success(request,'Password updated successfully')
+                return redirect('change_password')
+            else:
+                messages.error(request,'Please enter valid current passwoord')
+                return redirect('change_password')
+        else:
+           messages.error(request,'Password does not match!')
+           return redirect('change_password')
+    return render(request,'account/change_password.html')
+
+@login_required(login_url='login')
+def order_detail(request,order_id):
+    order_detail=OrderProduct.objects.filter(order__order_number=order_id)
+    order=Order.objects.get(order_number=order_id)
+    subtotal=0
+    for i in order_detail:
+        subtotal+= i.product_price + i.quantity
+    context ={
+    'order_detail':order_detail,
+    'order':order,
+    'subtotal':subtotal
+    }
+
+    return render(request,'account/order_detail.html',context)
+
 # Create your views here.
